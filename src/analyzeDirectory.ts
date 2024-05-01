@@ -10,14 +10,12 @@ function loadConfig() {
     return yaml.load(configFile) as any;
 }
 
-const config = loadConfig();
-
 // Function to initialize the Neo4j driver
-function createDriver() {
+function createDriver(config: any) {
     return neo4j.driver(config.neo4j.uri, neo4j.auth.basic(config.neo4j.user, config.neo4j.password));
 }
 
-function sanitizeForNeo4j(input: string): string {
+function sanitize(input: string): string {
     return input.replace(/[^a-zA-Z0-9_]/g, '_');
 }
 
@@ -31,7 +29,8 @@ function visit(node: ts.Node, sourceFile: ts.SourceFile, callGraph: Map<string, 
 
     if (ts.isCallExpression(node) && currentFunction) {
         const callSignature = node.expression.getText(sourceFile);
-        callGraph.get(currentFunction)!.add(callSignature);
+        const sanitizedCallSignature = sanitize(callSignature);
+        callGraph.get(currentFunction)!.add(sanitizedCallSignature);
     }
 
     ts.forEachChild(node, child => visit(child, sourceFile, callGraph, currentFunction));
@@ -57,8 +56,8 @@ function findTsFiles(dir: string, fileList: string[] = []) {
     return fileList;
 }
 
-async function insertCallGraph(callGraph: Map<string, Set<string>>) {
-    const driver = createDriver();
+async function insertCallGraph(config: any, callGraph: Map<string, Set<string>>) {
+    const driver = createDriver(config);
     const session = driver.session();
 
     try {
@@ -70,7 +69,7 @@ async function insertCallGraph(callGraph: Map<string, Set<string>>) {
                     'MATCH (caller:Function {name: $caller}) ' +
                     'MERGE (called:Function {name: $called}) ' +
                     'MERGE (caller)-[:CALLS]->(called)',
-                    { caller, called: sanitizeForNeo4j(called) }
+                    { caller, called: sanitize(called) }
                 );
             }
         }
@@ -80,13 +79,43 @@ async function insertCallGraph(callGraph: Map<string, Set<string>>) {
     }
 }
 
+function generatePlantUML(callGraph: Map<string, Set<string>>, outputFilePath: string) {
+    let plantUMLContent = "@startuml\n";
+    callGraph.forEach((calls, caller) => {
+        calls.forEach(called => {
+            plantUMLContent += `"${caller}" --> "${called}": calls\n`;
+        });
+    });
+    plantUMLContent += "@enduml";
+
+    fs.writeFileSync(outputFilePath, plantUMLContent);
+}
+
 if (process.argv.length < 3) {
     console.log("Usage: node <script> <directoryPath>");
     process.exit(1);
 }
 
-const directoryPath = process.argv[2];
-const callGraph = new Map();
-const files = findTsFiles(directoryPath);
-files.forEach(file => analyzeFile(file, callGraph));
-insertCallGraph(callGraph).catch(console.error);
+if (process.argv.length < 3) {
+    console.log("Usage: node <script> <directoryPath>");
+    process.exit(1);
+}
+
+
+function main() {
+    const directoryPath = process.argv[2];
+    const config = loadConfig();
+
+    const callGraph = new Map();
+    const files = findTsFiles(directoryPath);
+    files.forEach(file => analyzeFile(file, callGraph));
+
+    if (config.neo4j.output) {
+        insertCallGraph(config, callGraph).catch(console.error);
+    }
+    if (config.plantuml.output) {
+        generatePlantUML(callGraph, config.plantuml.outputfile);
+    }
+}
+
+main()

@@ -1,4 +1,9 @@
 neo4j:
+  output: false
   uri: "bolt://localhost:7687"
   user: "neo4j"
   password: "neo4j123"
+
+plantuml:
+  output: true
+  outputfile: output.puml
